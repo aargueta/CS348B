@@ -1,3 +1,11 @@
+# Images
+*.jpg
+*.tiff
+*.exr
+
+# PBRT folder
+pbrt-v2-master/
+
 # Compiled Object files
 *.slo
 *.lo
