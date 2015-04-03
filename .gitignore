@@ -4,7 +4,12 @@
 *.exr
 
 # PBRT folder
-pbrt-v2-master/
+pbrt-v2-master/bin/
+pbrt-v2-master/lib/
+pbrt-v2-master/tmp/
+pbrt-v2-master/src/pbrt.vs2008/
+pbrt-v2-master/src/pbrt.vs2010/
+pbrt-v2-master/src/pbrt.vs2012/
 
 # Compiled Object files
 *.slo
