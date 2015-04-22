@@ -39,6 +39,7 @@
 // accelerators/bvh.h*
 #include "pbrt.h"
 #include "primitive.h"
+#include "accelerators/MortonEncoder.h"
 struct BVHBuildNode;
 
 // BVHAccel Forward Declarations
@@ -61,14 +62,33 @@ private:
     BVHBuildNode *recursiveBuild(MemoryArena &buildArena,
         vector<BVHPrimitiveInfo> &buildData, uint32_t start, uint32_t end,
         uint32_t *totalNodes, vector<Reference<Primitive> > &orderedPrims);
+
+	BVHBuildNode *BVHAccel::buildAAC(MemoryArena &buildArena,
+		vector<BVHPrimitiveInfo> &buildData, uint32_t start, uint32_t end, 
+		uint32_t *totalNodes, vector<Reference<Primitive> > &orderedPrims);
+
+	BVHBuildNode *recursiveBuildAAC(MemoryArena &buildArena,
+		vector<BVHPrimitiveInfo> &buildData, uint32_t start, uint32_t end,
+		uint32_t *totalNodes, vector<Reference<Primitive> > &orderedPrims,
+		uint32_t mortonStart, uint32_t mortonEnd, uint32_t mortonBit);
+
     uint32_t flattenBVHTree(BVHBuildNode *node, uint32_t *offset);
 
     // BVHAccel Private Data
     uint32_t maxPrimsInNode;
-    enum SplitMethod { SPLIT_MIDDLE, SPLIT_EQUAL_COUNTS, SPLIT_SAH };
+    enum SplitMethod { SPLIT_MIDDLE, SPLIT_EQUAL_COUNTS, SPLIT_SAH, SPLIT_AAC };
     SplitMethod splitMethod;
     vector<Reference<Primitive> > primitives;
     LinearBVHNode *nodes;
+
+	// AAC Private Data
+	vector<MortonIndex*> mortonIndices;
+
+	uint32_t deltaAAC = 4;
+	float epsilonAAC = 0.2;
+	float cAAC = 0.5 * pow(deltaAAC, 0.5 + epsilonAAC);
+	float alphaAAC = 0.5 - epsilonAAC;
+
 };
 
 

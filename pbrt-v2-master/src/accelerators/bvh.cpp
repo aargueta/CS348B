@@ -35,6 +35,7 @@
 #include "accelerators/bvh.h"
 #include "probes.h"
 #include "paramset.h"
+#include "accelerators/MortonEncoder.h"
 
 // BVHAccel Local Declarations
 struct BVHPrimitiveInfo {
@@ -158,6 +159,7 @@ BVHAccel::BVHAccel(const vector<Reference<Primitive> > &p,
     if (sm == "sah")         splitMethod = SPLIT_SAH;
     else if (sm == "middle") splitMethod = SPLIT_MIDDLE;
     else if (sm == "equal")  splitMethod = SPLIT_EQUAL_COUNTS;
+	else if (sm == "aac")	 splitMethod = SPLIT_AAC;
     else {
         Warning("BVH split method \"%s\" unknown.  Using \"sah\".",
                 sm.c_str());
@@ -184,9 +186,16 @@ BVHAccel::BVHAccel(const vector<Reference<Primitive> > &p,
     uint32_t totalNodes = 0;
     vector<Reference<Primitive> > orderedPrims;
     orderedPrims.reserve(primitives.size());
-    BVHBuildNode *root = recursiveBuild(buildArena, buildData, 0,
-                                        primitives.size(), &totalNodes,
-                                        orderedPrims);
+	BVHBuildNode *root;
+	if (splitMethod == SPLIT_AAC) {
+		root = buildAAC(buildArena, buildData, 0,
+						primitives.size(), &totalNodes,
+						orderedPrims);
+	} else {
+		root = recursiveBuild(buildArena, buildData, 0,
+						 primitives.size(), &totalNodes,
+						 orderedPrims);
+	}
     primitives.swap(orderedPrims);
         Info("BVH created with %d nodes for %d primitives (%.2f MB)", totalNodes,
              (int)primitives.size(), float(totalNodes * sizeof(LinearBVHNode))/(1024.f*1024.f));
@@ -285,6 +294,9 @@ BVHBuildNode *BVHAccel::recursiveBuild(MemoryArena &buildArena,
                              &buildData[end-1]+1, ComparePoints(dim));
             break;
         }
+		case SPLIT_AAC: {
+			// Should never happen!!!!!!!!
+		}
         case SPLIT_SAH: default: {
             // Partition primitives using approximate SAH
             if (nPrimitives <= 4) {
@@ -364,13 +376,85 @@ BVHBuildNode *BVHAccel::recursiveBuild(MemoryArena &buildArena,
             break;
         }
         }
-        node->InitInterior(dim,
-                           recursiveBuild(buildArena, buildData, start, mid,
-                                          totalNodes, orderedPrims),
-                           recursiveBuild(buildArena, buildData, mid, end,
-                                          totalNodes, orderedPrims));
+		node->InitInterior(dim,
+						recursiveBuild(buildArena, buildData, start, mid,
+						totalNodes, orderedPrims),
+						recursiveBuild(buildArena, buildData, mid, end,
+						totalNodes, orderedPrims));
     }
     return node;
+}
+
+BVHBuildNode *BVHAccel::buildAAC(MemoryArena &buildArena,
+								 vector<BVHPrimitiveInfo> &buildData, uint32_t start, uint32_t end,
+								 uint32_t *totalNodes, vector<Reference<Primitive> > &orderedPrims) {
+
+	BBox centroidBounds;
+	for (uint32_t i = start; i < end; ++i)
+		centroidBounds = Union(centroidBounds, buildData[i].centroid);
+
+	// Partition primitives through Approximate Agglomerative Clustering
+	vector<MortonIndex*> mortonIndices;
+	MortonEncoder morton;
+	morton.SetBoundingBox(centroidBounds);
+	mortonIndices.clear();
+	for (uint32_t i = start; i < end; ++i) {
+		// Quantize coordinates WRT centroid bounding box (10 bits)
+		MortonIndex* mi = new MortonIndex();
+		mi->Init(i, morton.CalculateMortonEncoding(buildData[i].centroid));
+		mortonIndices.push_back(mi);
+	}
+	sort(&mortonIndices[0], &mortonIndices[mortonIndices.size() - 1],
+		 [&](MortonIndex* j, MortonIndex* k) { return j->encoding < k->encoding; }
+	);
+	
+	BVHBuildNode* root = recursiveBuildAAC(buildArena, buildData, start, end, totalNodes, orderedPrims, 0, mortonIndices.size() - 1, 29);
+	return root;
+}
+
+BVHBuildNode *BVHAccel::recursiveBuildAAC(MemoryArena &buildArena, vector<BVHPrimitiveInfo> &buildData,
+										  uint32_t start, uint32_t end, uint32_t *totalNodes,
+										  vector<Reference<Primitive>> &orderedPrims, uint32_t mortonStart,
+										  uint32_t mortonEnd, uint32_t mortonBit) {
+	Assert(start != end);
+	uint32_t nPrimitives = end - start;
+	if (nPrimitives < deltaAAC) {
+		// Make all into leaf nodes
+		BVHBuildNode* leafNodes = buildArena.Alloc<BVHBuildNode>(nPrimitives);
+		for (uint32_t i = 0; i < nPrimitives; i++) {
+			uint32_t primOffset = start + i;
+			uint32_t primNum = buildData[primOffset].primitiveNumber;
+			orderedPrims.push_back(primitives[primNum]);
+			leafNodes[i].InitLeaf(primOffset, 1, buildData[primOffset].bounds);
+		}
+		(*totalNodes) += nPrimitives;
+		// Combine clusters here
+		// TODO: CombineClusters(leafNodes, cAAC * pow(deltaAAC, alphaAAC));
+		return leafNodes;
+	}
+
+	// Partition by Morton Code
+	BVHBuildNode* left,* right;
+	if (mortonBit < 0) {
+		// Exhausted all 30 Morton code bits, just split in half
+		left = recursiveBuildAAC(buildArena, buildData, start, start + nPrimitives / 2, totalNodes, orderedPrims, mortonStart, mortonStart + nPrimitives / 2, 0);
+		right = recursiveBuildAAC(buildArena, buildData, start + nPrimitives / 2, end, totalNodes, orderedPrims, mortonStart + nPrimitives / 2, mortonEnd, 0);
+	}
+	uint32_t partitionIndex = -1;
+	while (partitionIndex <= mortonStart || partitionIndex >= mortonEnd) {
+		if (mortonBit < 0) {
+			// Exhausted all 30 Morton code bits, just split in half
+			left = recursiveBuildAAC(buildArena, buildData, start, start + nPrimitives / 2, totalNodes, orderedPrims, mortonStart, mortonStart + nPrimitives / 2, 0);
+			right = recursiveBuildAAC(buildArena, buildData, start + nPrimitives / 2, end, totalNodes, orderedPrims, mortonStart + nPrimitives / 2, mortonEnd, 0);
+		}
+		partitionIndex = MortonEncoder::findMortonPartition(mortonIndices, mortonStart, mortonEnd, mortonBit);
+		mortonBit--;
+	}
+	
+	uint32_t primsPartition = start + partitionIndex;
+	left = recursiveBuildAAC(buildArena, buildData, start, primsPartition, totalNodes, orderedPrims, mortonStart, partitionIndex, 0);
+	right = recursiveBuildAAC(buildArena, buildData, primsPartition, end, totalNodes, orderedPrims, partitionIndex, mortonEnd, 0);
+
 }
 
 
