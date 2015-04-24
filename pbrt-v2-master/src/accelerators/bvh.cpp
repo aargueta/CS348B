@@ -70,7 +70,7 @@ struct BVHBuildNode {
     BVHBuildNode *children[2];
     uint32_t splitAxis, firstPrimOffset, nPrimitives;
 	
-	int bestMatch;
+	BVHBuildNode* bestMatch;
 	double bestDist;
 };
 
@@ -413,21 +413,22 @@ BVHBuildNode *BVHAccel::buildAAC(MemoryArena &buildArena,
 	
 	vector<BVHBuildNode*> clusters = recursiveBuildAAC(buildArena, buildData, start, end, totalNodes, 0, mortonIndices.size() - 1, 29);
 	BVHBuildNode* root = combineClusters(buildArena, totalNodes, clusters, 1)[0];
-	orderPrimitives(root, buildData, orderedPrims);
+	int i = 0;
+	orderPrimitives(root, buildData, orderedPrims, i);
 	return root;
 }
 
 vector<BVHBuildNode*> BVHAccel::recursiveBuildAAC(MemoryArena &buildArena, vector<BVHPrimitiveInfo> &buildData,
 										  uint32_t start, uint32_t end, uint32_t *totalNodes, 
 										  uint32_t mortonStart, uint32_t mortonEnd, uint32_t mortonBit) {
-	Assert(start != end);
-	uint32_t nPrimitives = end - start;
+	Assert(mortonStart != mortonEnd);
+	uint32_t nPrimitives = mortonEnd - mortonStart;//end - start;
 	if (nPrimitives < deltaAAC) {
 		// Make all into leaf nodes
 		BVHBuildNode* leafNodes = buildArena.Alloc<BVHBuildNode>(nPrimitives);
 		vector<BVHBuildNode*> nodesToCluster;
 		for (uint32_t i = 0; i < nPrimitives; i++) {
-			uint32_t primOffset = start + i;
+			uint32_t primOffset = mortonIndices[mortonStart + i]->index;
 			uint32_t primNum = buildData[primOffset].primitiveNumber;
 			leafNodes[i].InitLeaf(primOffset, 1, buildData[primOffset].bounds);
 			nodesToCluster.push_back(&leafNodes[i]);
@@ -439,20 +440,30 @@ vector<BVHBuildNode*> BVHAccel::recursiveBuildAAC(MemoryArena &buildArena, vecto
 
 	// Partition by Morton Code
 	vector<BVHBuildNode*> left, right;
-	bool partitionGood = true;
+	bool partitionGood = false;
 	uint32_t partitionIndex = -1;
-	uint32_t splitDim = 0;
-	while (partitionIndex <= mortonStart || partitionIndex >= mortonEnd) {
+	while (!partitionGood) {
 		if (mortonBit <= 0) {
 			// Exhausted all 30 Morton code bits, just split in half
-			partitionGood = false;
+			Assert(!partitionGood);
 			break;
 		}
-		partitionIndex = MortonEncoder::findMortonPartition(mortonIndices, mortonStart, mortonEnd, mortonBit);
-		splitDim = (mortonBit % 3);
+		//mortonStart = 0;
+		//mortonEnd = 0x918;
+		//mortonBit = 0x1c;
+		partitionGood = MortonEncoder::findMortonPartition(mortonIndices, mortonStart, mortonEnd, mortonBit, partitionIndex);
 		mortonBit--;
 	}
 	if (partitionGood) {
+		// Assert good partition
+		assert(partitionIndex > 0 && partitionIndex < mortonIndices.size());
+		uint32_t zeroEncoding = mortonIndices[partitionIndex - 1]->encoding;
+		uint32_t maskedZeroEncoding = zeroEncoding & (0x1 << (mortonBit + 1));
+		uint32_t oneEncoding = mortonIndices[partitionIndex]->encoding;
+		uint32_t maskedOneEncoding = oneEncoding & (0x1 << (mortonBit + 1));
+		if (!(maskedZeroEncoding == 0 && maskedOneEncoding > 0)) {
+			printf("UH OH");
+		}
 		left = recursiveBuildAAC(buildArena, buildData, start, partitionIndex, totalNodes, mortonStart, partitionIndex, mortonBit);
 		right = recursiveBuildAAC(buildArena, buildData, partitionIndex, end, totalNodes, partitionIndex, mortonEnd, mortonBit);
 	} else {
@@ -469,6 +480,11 @@ vector<BVHBuildNode*> BVHAccel::recursiveBuildAAC(MemoryArena &buildArena, vecto
 }
 
 vector<BVHBuildNode*> BVHAccel::combineClusters(MemoryArena &buildArena, uint32_t *totalNodes, vector<BVHBuildNode*> clustersIn, uint32_t maxClustersOut) {
+	// Short circuit if nothing valid
+	if (clustersIn.size() <= maxClustersOut) {
+		return clustersIn;
+	}
+
 	// Get best matches
 	vector<BVHBuildNode*> clustersOut(clustersIn);
 	for (int i = 0; i < clustersIn.size(); i++) {
@@ -477,50 +493,54 @@ vector<BVHBuildNode*> BVHAccel::combineClusters(MemoryArena &buildArena, uint32_
 
 	while (clustersOut.size() > maxClustersOut) {
 		double bestOverallDist = DBL_MAX;
-		int bestOverallMatch = 0x0fffffff;
+		BVHBuildNode* bestOverallMatch = NULL;
 		for (int i = 0; i < clustersOut.size(); i++) {
 			if (clustersOut[i]->bestDist < bestOverallDist) {
 				bestOverallDist = clustersOut[i]->bestDist;
-				bestOverallMatch = i;
+				bestOverallMatch = clustersOut[i];
 			}
 		}
+		Assert(bestOverallMatch != NULL);
 		BVHBuildNode* newCluster = buildArena.Alloc<BVHBuildNode>();
 		(*totalNodes)++;
-		int leftIndex = bestOverallMatch;
-		int rightIndex = clustersOut[bestOverallMatch]->bestMatch;
-		newCluster->InitInterior(0, clustersOut[leftIndex], clustersOut[rightIndex]);
 
-		if (leftIndex > clustersOut.size() - 1 || rightIndex > clustersOut.size() - 1) {
+		BVHBuildNode* left = bestOverallMatch;
+		BVHBuildNode* right = left->bestMatch;
+		newCluster->InitInterior(0, left, right);
+
+		// Remove left
+		auto leftPtr = std::find(clustersOut.begin(), clustersOut.end(), left);
+		if (leftPtr == clustersOut.end()) {
 			printf("Uh oh...\n");
+		} else {
+			clustersOut.erase(leftPtr);
+		}
+		
+		// Remove right
+		auto rightPtr = std::find(clustersOut.begin(), clustersOut.end(), right);
+		if (rightPtr == clustersOut.end()) {
+			printf("Uh oh...\n");
+		} else {
+			clustersOut.erase(rightPtr);
 		}
 
-		// Remove Left
-		clustersOut[leftIndex] = clustersOut.back();
-		clustersOut.pop_back();
-		if (rightIndex == clustersOut.size()) {
-			// We just moved Right into Left's old place, woops.
-			// Just remove the Left one again to remove Right
-			clustersOut[leftIndex] = clustersOut.back();
-			clustersOut.pop_back();
-		} else {
-			// Remove Right
-			clustersOut[rightIndex] = clustersOut.back();
-			clustersOut.pop_back();
-		}
 		// Add new cluster
 		clustersOut.push_back(newCluster);
-		int newBestMatch;
-		double newBestDist;
 		findBestMatch(clustersOut, clustersOut.size() - 1);
 
 		// Replace old references
+		if (clustersOut.size() <= 1) {
+			return clustersOut;
+		}
 		for (int i = 0; i < clustersOut.size(); i++) {
-			int oldBestMatch = clustersOut[i]->bestMatch;
-			if (oldBestMatch == leftIndex || oldBestMatch == rightIndex || oldBestMatch >= clustersOut.size() - 1) {
+			BVHBuildNode* oldBestMatch = clustersOut[i]->bestMatch;
+			if (oldBestMatch == left || oldBestMatch == right) {
 				findBestMatch(clustersOut, i);
 			}
-			if (clustersOut[i]->bestMatch >= clustersOut.size() && clustersOut.size() > 1) {
+			if (clustersOut.size() > 1 && std::find(clustersOut.begin(), clustersOut.end(), clustersOut[i]->bestMatch) == clustersOut.end()){
+				// Wasn't left or right but disappeared??
 				printf("Uh oh\n");
+				Assert(false);
 			}
 		}
 	}
@@ -528,28 +548,33 @@ vector<BVHBuildNode*> BVHAccel::combineClusters(MemoryArena &buildArena, uint32_
 }
 
 void BVHAccel::findBestMatch(vector<BVHBuildNode*> clustersIn, int i) {
-	clustersIn[i]->bestMatch = 0x0fffffff;
+	clustersIn[i]->bestMatch = NULL;
 	clustersIn[i]->bestDist = DBL_MAX;
+	if (clustersIn.size() <= 1) {
+		return;
+	}
 	for (int j = 0; j < clustersIn.size(); j++) {
 		if (i != j) {
 			BBox box = Union(clustersIn[i]->bounds, clustersIn[j]->bounds);
 			double dist = box.SurfaceArea();
 			if (dist < clustersIn[i]->bestDist) {
 				clustersIn[i]->bestDist = dist;
-				clustersIn[i]->bestMatch = j;
+				clustersIn[i]->bestMatch = clustersIn[j];
 			}
 		}
 	}
+	Assert(clustersIn[i]->bestMatch != NULL);
 }
 
-void BVHAccel::orderPrimitives(BVHBuildNode* node, vector<BVHPrimitiveInfo> &buildData, vector<Reference<Primitive>> &orderedPrims) {
+void BVHAccel::orderPrimitives(BVHBuildNode* node, vector<BVHPrimitiveInfo> &buildData, vector<Reference<Primitive>> &orderedPrims, int &i) {
 	if (node->children[0] != NULL || node->children[1] != NULL) {
 		// Interior node
-		orderPrimitives(node->children[0], buildData, orderedPrims);
-		orderPrimitives(node->children[1], buildData, orderedPrims);
+		orderPrimitives(node->children[0], buildData, orderedPrims, i);
+		orderPrimitives(node->children[1], buildData, orderedPrims, i);
 	} else {
 		// Leaf node
-		orderedPrims.push_back(primitives[buildData[node->firstPrimOffset].primitiveNumber]);
+		orderedPrims.push_back(primitives[buildData[i].primitiveNumber]);
+		i++;
 	}
 }
 

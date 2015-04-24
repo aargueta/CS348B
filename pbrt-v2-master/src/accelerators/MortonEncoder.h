@@ -24,7 +24,7 @@ public:
 	void SetBoundingBox(BBox bounds);
 	uint32_t CalculateMortonEncoding(Point point);
 
-	static uint32_t findMortonPartition(vector<MortonIndex*> mortonIndices, uint32_t start, uint32_t end, uint32_t mortonBit);
+	static bool findMortonPartition(vector<MortonIndex*> mortonIndices, uint32_t start, uint32_t end, uint32_t mortonBit, uint32_t &partition);
 
 private:
 	float xScale, yScale, zScale;

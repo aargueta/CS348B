@@ -75,7 +75,7 @@ private:
 	vector<BVHBuildNode*> combineClusters(MemoryArena &buildArena, uint32_t *totalNodes, vector<BVHBuildNode*> clustersIn, uint32_t maxClustersOut);
 	void BVHAccel::findBestMatch(vector<BVHBuildNode*> clustersIn, int i);
 
-	void BVHAccel::orderPrimitives(BVHBuildNode* node, vector<BVHPrimitiveInfo> &buildData, vector<Reference<Primitive>> &orderedPrims);
+	void BVHAccel::orderPrimitives(BVHBuildNode* node, vector<BVHPrimitiveInfo> &buildData, vector<Reference<Primitive>> &orderedPrims, int &i);
 
     uint32_t flattenBVHTree(BVHBuildNode *node, uint32_t *offset);
 

@@ -26,23 +26,46 @@ uint32_t MortonEncoder::CalculateMortonEncoding(Point point) {
 }
 
 
-uint32_t MortonEncoder::findMortonPartition(vector<MortonIndex*> mortonIndices, uint32_t start, uint32_t end, uint32_t mortonBit) {
+bool MortonEncoder::findMortonPartition(vector<MortonIndex*> mortonIndices, uint32_t start, uint32_t end, uint32_t mortonBit, uint32_t &partition) {
 	uint32_t bitMask = 1 << mortonBit;
-	if ((mortonIndices[start]->encoding & bitMask) > 0) {
-		return start;
-	}
-	
+
+	// Check if bad range, indicates we're at the end of a search
 	uint32_t dist = end - start;
-	if (dist == 0) {
-		return start;
+	if (dist <= 1) {
+		return false;
 	}
 
+	// Check if it starts at ones, meaning we found the partition
 	uint32_t center = start + (dist / 2);
-	if ((mortonIndices[center]->encoding & bitMask) > 0) {
-		return findMortonPartition(mortonIndices, center, end, mortonBit);
-	} else {
-		return findMortonPartition(mortonIndices, start, center, mortonBit);
+	
+	uint32_t centerEncoding = mortonIndices[center]->encoding;
+	uint32_t preCenterEncoding = mortonIndices[center - 1]->encoding;
+
+	uint32_t centerMortonBit = centerEncoding & bitMask;
+	uint32_t preCenterMortonBit = preCenterEncoding & bitMask;
+	
+	uint8_t edgeDetector = (preCenterMortonBit > 0) << 4 | (centerMortonBit > 0); 
+	switch (edgeDetector) {
+		case (0x00) : 
+			// Still in zeroes, search later
+			return findMortonPartition(mortonIndices, center, end, mortonBit, partition);
+		case (0x01) : 
+			// Found edge
+			partition = center;
+			return true;
+		case (0x10) : 
+			// Should never happen
+			printf("Uh oh...");
+			return false;
+		case (0x11) : 
+			// Already in ones, search before
+			return findMortonPartition(mortonIndices, start, center, mortonBit, partition);
+		default:
+			// Also shouldn't happen
+			printf("Uh oh...");
+			return false;
 	}
+	return false; // Should never reach here
 }
 
 uint32_t MortonEncoder::spreadEvery3(uint32_t a) {
