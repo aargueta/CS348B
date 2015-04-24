@@ -28,7 +28,7 @@ uint32_t MortonEncoder::CalculateMortonEncoding(Point point) {
 
 uint32_t MortonEncoder::findMortonPartition(vector<MortonIndex*> mortonIndices, uint32_t start, uint32_t end, uint32_t mortonBit) {
 	uint32_t bitMask = 1 << mortonBit;
-	if (mortonIndices[start]->encoding & bitMask > 0) {
+	if ((mortonIndices[start]->encoding & bitMask) > 0) {
 		return start;
 	}
 	
@@ -38,7 +38,7 @@ uint32_t MortonEncoder::findMortonPartition(vector<MortonIndex*> mortonIndices, 
 	}
 
 	uint32_t center = start + (dist / 2);
-	if (mortonIndices[center]->encoding & bitMask > 0) {
+	if ((mortonIndices[center]->encoding & bitMask) > 0) {
 		return findMortonPartition(mortonIndices, center, end, mortonBit);
 	} else {
 		return findMortonPartition(mortonIndices, start, center, mortonBit);

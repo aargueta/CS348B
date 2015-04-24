@@ -67,10 +67,15 @@ private:
 		vector<BVHPrimitiveInfo> &buildData, uint32_t start, uint32_t end, 
 		uint32_t *totalNodes, vector<Reference<Primitive> > &orderedPrims);
 
-	BVHBuildNode *recursiveBuildAAC(MemoryArena &buildArena,
+	vector<BVHBuildNode*> recursiveBuildAAC(MemoryArena &buildArena,
 		vector<BVHPrimitiveInfo> &buildData, uint32_t start, uint32_t end,
-		uint32_t *totalNodes, vector<Reference<Primitive> > &orderedPrims,
-		uint32_t mortonStart, uint32_t mortonEnd, uint32_t mortonBit);
+		uint32_t *totalNodes, uint32_t mortonStart, uint32_t mortonEnd, 
+		uint32_t mortonBit);
+
+	vector<BVHBuildNode*> combineClusters(MemoryArena &buildArena, uint32_t *totalNodes, vector<BVHBuildNode*> clustersIn, uint32_t maxClustersOut);
+	void BVHAccel::findBestMatch(vector<BVHBuildNode*> clustersIn, int i);
+
+	void BVHAccel::orderPrimitives(BVHBuildNode* node, vector<BVHPrimitiveInfo> &buildData, vector<Reference<Primitive>> &orderedPrims);
 
     uint32_t flattenBVHTree(BVHBuildNode *node, uint32_t *offset);
 
