@@ -1,0 +1,32 @@
+BVH - Build / Render
+sibenik - 7.57s / 119.9s
+teapot - 0.20s / 76.5s
+villa - 274.16s /175.5s
+yeahright - 20.00s / 274.4s
+
+Grid - Build / Render
+sibenik - 0.33s / 595.8s
+teapot - 0.06s / 91.7s
+villa - 2.06s / 1058.9s
+yeahright - 0.12s / 789.8s
+
+KD Tree - Build / Rendero
+sibenik - 15.23s / 128.7s
+teapot - 0.40s / 105.0s
+villa - 564.98s / 305.1s
+yeahright - 30.59s / 350.2s
+
+Out of BVH, Grid, and KD is best for sibenik, teapot, villa, and yeahright. It basically excels at both simple and complex scenes, both in terms of lighting (complex global illumination like villa) and geometry (lots of primitives grouped in a small area in yeahright). While, it is exponentially more expensive to generate than the Grid acceleration structure, it far outstrips it in render performance when presented with scenes with uneven distributions of complexity.
+
+Grid is able to relatively keep up in simple and evenly distributed scenes such as sibenik and teapot, which makes sense since it doesn't account for complexity concentration. This hurts it when it allocates the same amount of acceleration structure to the ceiling in the villa as it does for the complex translucent chanelier.
+
+KD Tree is almost on par with the BVH in terms of render time (with the exception of villa, where complexity is distributed through a large depth field), but it's build time is consistently twice that of the BVH.
+
+
+BVH-AAC - Build / Render
+sibenik - 13.96s / 97.2s
+teapot - 1.14s / 66.9s
+villa - 498.91s / 212.0s
+yeahright - 28.55s / 235.5s
+
+THe AAC builds much slower, from 1.5x to 5x the time in some cases, however,the rendering time for the AAC clustering vs the traditional BVH is faster in the sibenik, teapot, and villa scenes. However, yeahright performs significantly better in the BVH in terms of build and render due to the tight clustering of complexity.
