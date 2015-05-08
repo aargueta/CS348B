@@ -13,6 +13,7 @@ pbrt-v2-master/src/pbrt.vs2012/
 
 #Scenes
 hw2-scenes/
+hw3/
 
 # Compiled Object files
 *.slo
