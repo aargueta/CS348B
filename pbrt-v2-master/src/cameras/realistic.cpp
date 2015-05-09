@@ -197,9 +197,9 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray, bool en
 	// use sample->lensU and sample->lensV to get a sample position on the lens
 
 	// GenerateRay() should return the weight of the generated ray
-	// Transform pixel space to film space
 
-	float xSample = ((sample.imageX / filmXRes) - 0.5f) * filmXDim;
+	// Transform raster space to film space
+	float xSample = ((sample.imageX / filmXRes) - 0.5f) * -filmXDim;
 	float ySample = ((sample.imageY / filmYRes) - 0.5f) * filmYDim;
 	float filmZ = lenses.back().zIntercept - filmDistance;
 	Point pRas(xSample, ySample, filmZ);
@@ -251,6 +251,7 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray, bool en
 		}
 		oldRay = *ray;
 	}
+#ifdef DEBUG
 	if ((*raysSent) % 16 == 0 && debugRayPts.size() > 1 && *raysSent < 10000) {
 		fprintf(logFile, "RAY, ");
 		for (int i = 0; i < debugRayPts.size(); i++) {
@@ -268,9 +269,11 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray, bool en
 		printf("File closed...\n");
 		*logClosed = true;
 	}
+#endif DEBUG
+
 	(*raysSent)++;
 	ray->time = sample.time;
-	//ray->o /= 1000; // Scale from mm to meters
+
 	Ray tempRay(*ray);
 	CameraToWorld(tempRay, ray);
 	ray->d = Normalize(ray->d);
@@ -420,9 +423,76 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 		float focusDir = 5.f;
 		bool focusFineGrain = false;
 		vector<float> fDists;
-		vector<float> focusVals;
+		vector<float> fVals;
+
+		float fDistX, fDistY, fDistA, fDistB;
+		float fValX, fValY;
+		float gr = 0.618f;
+		float fTol = 2.f;
+		fDistA = abs(lenses.back().zIntercept) / 2.f;
+		fDistB = 150.f;
+		fDistX = fDistB - gr*(fDistB - fDistA);
+		fDistY = fDistA + gr*(fDistB - fDistA);
 
 		while (!focusDone) {
+//#define CRAPPY
+#define SHINY
+#ifdef SHINY
+			// Golden Ratio Search (binary-ish)
+			if (focusIters % 2 == 0) {
+				// End condition
+				if (abs(fDistX - fDistY) < fTol) {
+					focusDone = true;
+					filmDistance = (fDistA + fDistB) / 2.f;
+					printf("Found solution at %f\n", filmDistance);
+					break;
+				}
+				// Every two, update search points
+				if (focusIters >= 2) {
+					// Start searching
+					if (fValX > fValY) {
+						printf("X is better at %f=%f\n", fDistX, fValX);
+						fDistB = fDistY;
+						fDistY = fDistX;
+						fDistX = fDistB - gr*(fDistB - fDistA);
+					} else {
+						printf("Y is better at %f=%f\n", fDistY, fValY);
+						fDistA = fDistX;
+						fDistX = fDistY;
+						fDistY = fDistA + gr*(fDistB - fDistA);
+					}
+				}
+			}
+			// Evaluate search points
+			switch (focusIters % 2) {
+				case(0) :
+					printf("Evaluating X at %f...", fDistX);
+					filmDistance = fDistX;
+					break;
+				case(1) :
+					printf("Evaluating Y at %f...", fDistY);
+					filmDistance = fDistY;
+					break;
+			}
+
+			// Check cached values
+			vector<float>::iterator it = std::find(fDists.begin(), fDists.end(), filmDistance);
+			if (it != fDists.end()) {
+				// Found in cache!
+				int cachedIndex = it - fDists.begin();
+				printf(" = %f [CACHED]\n", fVals[cachedIndex]);
+				switch (focusIters % 2) {
+					case(0) :
+						fValX = fVals[cachedIndex];
+						break;
+					case(1) :
+						fValY = fVals[cachedIndex];
+						break;
+				}
+				focusIters++;
+				continue;
+			}
+#endif
 			AfZone & zone = afZones[i];
 
 			RNG rng;
@@ -506,12 +576,41 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 			CalcModLaplacian(rgb, &modLap, width, height);
 			float currFocusVal = 0;
 
+#ifdef DEBUG
 			std::stringstream modLapFilename;
 			modLapFilename << "modlap" << focusIters << ".csv";
 			FILE* modLapFile = fopen(modLapFilename.str().c_str(), "w");
 			Assert(modLapFile != NULL);
+#endif
+
 			int mlX = width - 2;
 			int mlY = height - 2;
+			for (int j = 0; j < mlX*mlY; j++) {
+				currFocusVal += modLap[j];
+			}
+
+#ifdef CRAPPY
+			printf("Focusing @ %f = %f\n", filmDistance, currFocusVal);
+			fVals.push_back(currFocusVal);
+			fDists.push_back(filmDistance);
+#endif
+
+#ifdef SHINY
+			// Saving search points
+			printf(" = %f\n", currFocusVal);
+			fVals.push_back(currFocusVal);
+			fDists.push_back(filmDistance);
+			switch (focusIters % 2) {
+				case(0) :
+					fValX = currFocusVal;
+					break;
+				case(1) :
+					fValY = currFocusVal;
+					break;
+			}
+#endif
+
+#ifdef DEBUG
 			for (int j = 0; j < mlY; j++) {
 				for (int k = 0; k < mlX; k++) {
 					currFocusVal += modLap[k + mlX * j];
@@ -522,12 +621,13 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 					}
 				}
 			}
-			printf("Focusing, iter #%u = %f\n", focusIters, currFocusVal);
- 			fclose(modLapFile);
+			fclose(modLapFile);
+#endif
 
+#ifdef CRAPPY
 			// Record current settings
 			fDists.push_back(filmDistance);
-			focusVals.push_back(currFocusVal);
+			fVals.push_back(currFocusVal);
 
 			// Set next settings
 			focusFineGrain = (focusIters >= 2);
@@ -537,17 +637,17 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 			} else {
 				if (focusIters == 2) {
 					// Determine final direction
-					if (max(focusVals[0], focusVals[1]) < focusVals[2]) {
+					if (max(fVals[0], fVals[1]) < fVals[2]) {
 						// #2 best, go from #1 -> #2
 						focusDir = abs(focusDir / 2.f);
 						filmDistance = fDists[1] + focusDir;
-					} else if (max(focusVals[1], focusVals[2]) < focusVals[0]) {
+					} else if (max(fVals[1], fVals[2]) < fVals[0]) {
 						// #0 best, go from #1 -> #0
 						focusDir = -abs(focusDir / 2.f);
 						filmDistance = fDists[1] + focusDir;
 					}else{
 						// #1 best, go towards second best
-						if (focusVals[0] > focusVals[2]) {
+						if (fVals[0] > fVals[2]) {
 							focusDir = -abs(focusDir / 2.f);
 						} else {
 							focusDir = abs(focusDir / 2.f);
@@ -555,18 +655,19 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 						filmDistance = fDists[1] + focusDir;
 					}
 				} else {
-					int prevIndex = focusVals.size() - 2;
-					if (focusVals[prevIndex] > focusVals.back()) {
+					int prevIndex = fVals.size() - 2;
+					if (fVals[prevIndex] > fVals.back()) {
 						// Went too far, increase search granularity
 						focusDir /= 2.f;
 						// Undo bad search
 						fDists.back() = fDists[prevIndex];
-						focusVals.back() = focusVals[prevIndex];
+						fVals.back() = fVals[prevIndex];
 						// Start closer search
 						filmDistance = fDists[prevIndex] + focusDir;
 						if (abs(focusDir) < 1.f) {
 							// Close enough, give up after cleaning up
-							focusIters = 12; // Enough to give up
+							focusDone;
+							//focusIters = 12; // Enough to give up
 						}
 					} else {
 						// Getting closer, continue in same direction
@@ -574,6 +675,7 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 					}
 				}
 			}
+#endif
 
 			//you own rgb  now so make sure to delete it:
 			delete[] rgb;
@@ -587,9 +689,11 @@ void  RealisticCamera::AutoFocus(Renderer * renderer, const Scene * scene, Sampl
 			delete[] Ts;
 			delete[] isects;
 
+#ifdef CRAPPY
 			if (focusIters > 10) {
 				break;
 			}
+#endif
 			focusIters++;
 		}
 	}
