@@ -46,6 +46,10 @@ public:
    void  ParseCameraSpec(const string& filename);
    void  ParseAfZones(const string& filename);
    bool  PassRayThroughLens(Lens lens, Ray* ray, float prevIndexOfRefraction) const;
+   void  CalcModLaplacian(float* rgb, float** modLap, int width, int height);
+   void  WriteModLapToRGB(float* modLap, int dimModLap, float** rgb);
+   float RGBToI(float* rgb);
+   void  IToGrey(float i, float* rgb);
 
 private:
    bool  autofocus;
