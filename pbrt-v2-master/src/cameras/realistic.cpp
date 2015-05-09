@@ -69,6 +69,9 @@ RealisticCamera::RealisticCamera(const AnimatedTransform &cam2world,
 	float localXDim = filmXDim;
 	filmYDim = filmdiag * filmRatio / sqrt(pow(filmRatio, 2.f) + 1);
 	float localYDim = filmYDim;
+
+	exitPupilRadius = FindExitPupil(stopIndex);
+
 	// If 'autofocusfile' is the empty string, then you should do
 	// nothing in any subsequent call to AutoFocus()
 	autofocus = false;
@@ -99,10 +102,12 @@ void RealisticCamera::ParseCameraSpec(const string& filename) {
 		}
 	}
 	float zIntercept = 0.0f;
+	stopIndex = 0;
 	for (int i = 0; i < lenses.size(); i++) {
 		lenses[i].zIntercept = zIntercept;
 		if (lenses[i].radius == 0.f) {
 			// Stop detected
+			stopIndex = i;
 			if (i > 0) {
 				lenses[i].indexOfRefraction = lenses[i - 1].indexOfRefraction;
 			} else {
@@ -126,6 +131,23 @@ void RealisticCamera::ParseCameraSpec(const string& filename) {
 	*rasXMax = -10000.f;
 	*rasYMin = 10000.f;
 	*rasYMax = -10000.f;
+}
+
+float RealisticCamera::FindExitPupil(int stopIndex) {
+	Ray ray;
+	CameraSample sample;
+	sample.imageX = filmXRes / 2.f;
+	sample.imageY = filmYRes / 2.f;
+	sample.lensU = 0.f;
+	sample.lensV = 1.f;
+	while (sample.lensV > 0.f) {
+		float weight = GenerateRay(sample, &ray, false);
+		if (weight > 0.f) {
+			return sample.lensV * lenses[0].aperture;
+		}
+		sample.lensV -= .01f;
+	}
+	Assert(false);
 }
 
 
@@ -159,10 +181,13 @@ RealisticCamera::~RealisticCamera()
 #ifdef DEBUG
 	fprintf(logFile, "LIMITS, %f, %f, %f, %f\n", *rasXMin, *rasXMax, *rasYMin, *rasYMax);
 #endif DEBUG
-	fclose(logFile);
+	//fclose(logFile);
+}
+float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray) const {
+	return GenerateRay(sample, ray, true);
 }
 
-float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray) const
+float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray, bool enRandNWeight) const
 {
 	// YOUR CODE HERE -- make that ray!
 
@@ -175,7 +200,8 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray) const
 
 	float xSample = ((sample.imageX / filmXRes) - 0.5f) * filmXDim;
 	float ySample = ((sample.imageY / filmYRes) - 0.5f) * filmYDim;
-	Point pRas(xSample, ySample, lenses.back().zIntercept - filmDistance);
+	float filmZ = lenses.back().zIntercept - filmDistance;
+	Point pRas(xSample, ySample, filmZ);
 	
 #ifdef DEBUG
 	// DEBUG: Check sample limits
@@ -187,10 +213,17 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray) const
 
 	// Create point on sample disk (at origin)
 	float lensU, lensV;
-	ConcentricSampleDisk(sample.lensU, sample.lensV, &lensU, &lensV);
-	lensU *= lenses[0].radius;
-	lensV *= lenses[0].radius;
-	Point pLens(lensU, lensV, 0);
+	if (enRandNWeight) {
+		ConcentricSampleDisk(sample.lensU, sample.lensV, &lensU, &lensV);
+	} else {
+		lensU = sample.lensU;
+		lensV = sample.lensV;
+	}
+	// Shoot at closest lens for exit pupil testing
+	// Otherwise shoot at exit pupil
+	lensU *= (enRandNWeight) ? exitPupilRadius : lenses.back().radius;
+	lensV *= (enRandNWeight) ? exitPupilRadius : lenses.back().radius;
+	Point pLens(lensU, lensV, (enRandNWeight) ? lenses[stopIndex].zIntercept : lenses.back().zIntercept);
 
 	vector<Point> debugRayPts;
 
@@ -217,7 +250,7 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray) const
 		}
 		oldRay = *ray;
 	}
-	if ((*raysSent) % 16 == 0 && debugRayPts.size() > 1 && *raysSent < 2000) {
+	if ((*raysSent) % 16 == 0 && debugRayPts.size() > 1 && *raysSent < 100000) {
 		fprintf(logFile, "RAY, ");
 		for (int i = 0; i < debugRayPts.size(); i++) {
 			Point p = debugRayPts[i];
@@ -227,18 +260,31 @@ float RealisticCamera::GenerateRay(const CameraSample &sample, Ray *ray) const
 				fprintf(logFile, "%f, %f, %f\n", p.x, p.y, p.z);
 			}
 		}
+		fprintf(logFile, "\n");
 	}
 	if (*raysSent >= 500 && !(*logClosed)) {
-		//fclose(logFile);
-		//*logClosed = true;
+		fclose(logFile);
+		printf("File closed...\n");
+		*logClosed = true;
 	}
 	(*raysSent)++;
 	ray->time = sample.time;
 	//ray->o /= 1000; // Scale from mm to meters
-	CameraToWorld(*ray, ray);
+	Ray tempRay(*ray);
+	CameraToWorld(tempRay, ray);
 	ray->d = Normalize(ray->d);
 	if (rayGood) {
-		return 1.0f;
+		if (enRandNWeight) {
+			float areaExitPupil = M_PI * pow(exitPupilRadius, 2.f);
+			float zintExitPupil = lenses[stopIndex].zIntercept;
+			float distToExitPupilCenter = (Point(0.f, 0.f, zintExitPupil) - pRas).Length();
+			float cosExitPupil = (zintExitPupil - filmZ) / distToExitPupilCenter;
+			// This is way too dim, basically mapping it to cos^4
+			float irr = areaExitPupil / pow((zintExitPupil - filmZ), 2.f) * pow(cosExitPupil, 4.f);
+			return irr;
+		} else {
+			return 1.f;
+		}
 	} else {
 		return 0.0f;
 	}

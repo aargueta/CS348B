@@ -39,19 +39,23 @@ public:
       float filmdiag,
 	  Film *film);
    ~RealisticCamera();
-   float GenerateRay(const CameraSample &sample, Ray *) const;
+   float FindExitPupil(int stopIndex);
+   float GenerateRay(const CameraSample &sample, Ray * ray) const;
+   float GenerateRay(const CameraSample &sample, Ray * ray, bool enRandNWeight = true) const;
    void  AutoFocus(Renderer * renderer, const Scene * scene, Sample * origSample);
    void  ParseCameraSpec(const string& filename);
    void  ParseAfZones(const string& filename);
-   bool PassRayThroughLens(Lens lens, Ray* ray, float prevIndexOfRefraction) const;
+   bool  PassRayThroughLens(Lens lens, Ray* ray, float prevIndexOfRefraction) const;
 
 private:
    bool  autofocus;
    vector<Lens> lenses;
+   int stopIndex;
    float filmDistance;
    float filmDiag;
    float filmXDim, filmYDim;
    float filmXRes, filmYRes;
+   float exitPupilRadius;
    vector<AfZone> afZones;
    float ShutterOpen;
    float ShutterClose;
